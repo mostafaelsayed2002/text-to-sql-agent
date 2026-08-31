@@ -51,12 +51,8 @@ class QueryResults:
 
 
 class QueryFailed(Exception):
-    """The database rejected or could not run the query.
-
-    The message is Postgres' own, which is deliberate: it names the offending
-    column and often suggests a correction, so it is better retry feedback for
-    the model than anything reworded here.
-    """
+    """The database rejected the query. The message is Postgres' own, which names
+    the offending column and often suggests a correction."""
 
 
 def get_connection() -> psycopg.Connection:
@@ -99,11 +95,8 @@ def format_as_ddl(schema: Schema) -> str:
 
 
 def _json_safe(value: Any) -> Any:
-    """Convert Postgres types the JSON encoder cannot handle.
-
-    numeric comes back as Decimal and timestamps as datetime; both would raise
-    when FastAPI serialises the response.
-    """
+    """numeric arrives as Decimal and timestamps as datetime; both would raise
+    when FastAPI serialises the response."""
     if isinstance(value, Decimal):
         return float(value)
     if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
@@ -114,12 +107,8 @@ def _json_safe(value: Any) -> Any:
 def run_query(
     conn: psycopg.Connection, sql: str, row_limit: int | None = None
 ) -> QueryResults:
-    """Execute already-validated SQL and return rows shaped for the frontend.
-
-    `sql` must have been through validator.validate() first -- this function
-    does no checking of its own. `row_limit` is the cap the validator applied,
-    used only to report truncation.
-    """
+    """Execute already-validated SQL. Does no checking of its own -- `sql` must
+    have been through validator.validate(). `row_limit` only reports truncation."""
     try:
         with conn.cursor() as cur:
             cur.execute(sql)  # type: ignore[arg-type]
