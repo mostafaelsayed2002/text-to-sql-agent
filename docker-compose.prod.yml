@@ -4,9 +4,18 @@
 #
 #   docker compose -f docker-compose.prod.yml pull
 #   docker compose -f docker-compose.prod.yml up -d
+#
+# This box already runs a separate "blog" stack whose nginx container owns
+# 80/443 and routes to backends BY CONTAINER NAME over the blog_default
+# network. So these services join that network instead of publishing ports:
+# binding to host loopback would be unreachable from a proxy that is itself a
+# container.
+#
+# Services are prefixed sql-* because Compose registers every service name as a
+# network alias, and the blog stack already has one called "frontend".
 
 services:
-  db:
+  sql-db:
     image: postgres:17-alpine
     environment:
       POSTGRES_DB: chinook
@@ -19,33 +28,41 @@ services:
       test: ["CMD-SHELL", "pg_isready -U postgres -d chinook"]
       interval: 5s
       retries: 10
-    # No ports section: the database is reachable only from the compose network.
+    # Default network only: no published port, and deliberately not on the
+    # shared network, so nothing outside this stack can reach the database.
     restart: unless-stopped
 
-  api:
+  sql-api:
     image: ${DOCKERHUB_USERNAME}/text-to-sql-api:${TAG:-latest}
     environment:
-      DB_HOST: db
+      DB_HOST: sql-db
       APP_RO_PASSWORD: ${APP_RO_PASSWORD}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
       RATE_LIMIT: ${RATE_LIMIT:-10/minute}
-    # Bound to loopback: nginx on the host terminates TLS and proxies in, so
-    # the container itself is never exposed to the internet.
-    ports:
-      - "127.0.0.1:8000:8000"
+    networks:
+      - default
+      - blog_default
     depends_on:
-      db:
+      sql-db:
         condition: service_healthy
+    # Reached as http://sql-api:8000 from the nginx container.
     restart: unless-stopped
 
-  frontend:
+  sql-frontend:
     image: ${DOCKERHUB_USERNAME}/text-to-sql-frontend:${TAG:-latest}
-    ports:
-      - "127.0.0.1:3000:3000"
+    networks:
+      - default
+      - blog_default
     depends_on:
-      - api
+      - sql-api
     restart: unless-stopped
+
+networks:
+  # Created and owned by the blog stack; declared external so this file never
+  # tries to manage or remove it.
+  blog_default:
+    external: true
 
 volumes:
   pgdata:
