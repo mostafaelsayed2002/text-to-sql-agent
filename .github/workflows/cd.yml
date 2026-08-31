@@ -1,0 +1,92 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # Tests gate the build: nothing is published unless CI would pass.
+  test:
+    name: Test
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Build and push images
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      API_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/text-to-sql-api
+      FRONTEND_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/text-to-sql-frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push API
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          # Tagged by commit SHA as well as latest, so a bad deploy can be
+          # rolled back to an exact known-good image.
+          tags: |
+            ${{ env.API_IMAGE }}:${{ github.sha }}
+            ${{ env.API_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          # NEXT_PUBLIC_* is compiled into the client bundle, so the public API
+          # URL has to be supplied here and not at run time.
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ secrets.PUBLIC_API_URL }}
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+            ${{ env.FRONTEND_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to VPS
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only the compose file and the database init scripts. Source never
+      # reaches the server; it runs the images CI built.
+      - name: Copy compose files to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: "docker-compose.prod.yml,db/*"
+          target: ${{ secrets.VPS_PATH }}
+
+      - name: Pull and restart
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          # TAG pins this deploy to the exact images just published, rather
+          # than whatever :latest happens to point at.
+          script: |
+            set -e
+            cd ${{ secrets.VPS_PATH }}
+            export TAG=${{ github.sha }}
+            export DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            docker image prune -f
