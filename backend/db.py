@@ -7,9 +7,12 @@ database enforces the read-only contract regardless of what this code does.
 
 from __future__ import annotations
 
+import datetime
 import os
 from collections import defaultdict
 from dataclasses import dataclass
+from decimal import Decimal
+from typing import Any
 
 import psycopg
 from dotenv import load_dotenv
@@ -32,10 +35,28 @@ class Column:
     nullable: bool
 
 
-# Schema = {table_name: [Column, ...]}. The validator checks generated SQL
-# against this; format_as_ddl() turns the same dict into prompt text. One
-# source, two consumers.
+# Schema = {table_name: [Column, ...]}, read once from the live database and
+# rendered into the prompt by format_as_ddl().
 Schema = dict[str, list[Column]]
+
+
+@dataclass(frozen=True)
+class QueryResults:
+    """Mirrors QueryResults in frontend/lib/types.ts -- keep the two in step."""
+
+    columns: list[str]
+    rows: list[list[Any]]
+    row_count: int
+    truncated: bool
+
+
+class QueryFailed(Exception):
+    """The database rejected or could not run the query.
+
+    The message is Postgres' own, which is deliberate: it names the offending
+    column and often suggests a correction, so it is better retry feedback for
+    the model than anything reworded here.
+    """
 
 
 def get_connection() -> psycopg.Connection:
@@ -75,6 +96,51 @@ def format_as_ddl(schema: Schema) -> str:
         )
         blocks.append(f"CREATE TABLE {table} (\n{lines}\n);")
     return "\n\n".join(blocks)
+
+
+def _json_safe(value: Any) -> Any:
+    """Convert Postgres types the JSON encoder cannot handle.
+
+    numeric comes back as Decimal and timestamps as datetime; both would raise
+    when FastAPI serialises the response.
+    """
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+        return value.isoformat()
+    return value
+
+
+def run_query(
+    conn: psycopg.Connection, sql: str, row_limit: int | None = None
+) -> QueryResults:
+    """Execute already-validated SQL and return rows shaped for the frontend.
+
+    `sql` must have been through validator.validate() first -- this function
+    does no checking of its own. `row_limit` is the cap the validator applied,
+    used only to report truncation.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)  # type: ignore[arg-type]
+            # A statement returning nothing (no SELECT) leaves description None.
+            columns = [d.name for d in cur.description] if cur.description else []
+            rows = [[_json_safe(v) for v in row] for row in cur.fetchall()]
+    except psycopg.Error as e:
+        # Roll back so the connection stays usable for the next attempt in the
+        # retry loop; a failed statement leaves the transaction aborted.
+        conn.rollback()
+        raise QueryFailed(str(e).strip()) from e
+
+    return QueryResults(
+        columns=columns,
+        rows=rows,
+        row_count=len(rows),
+        # Best guess: the cap was reached. A query whose honest answer is
+        # exactly row_limit rows reports a false positive, which is the safe
+        # direction to be wrong in.
+        truncated=row_limit is not None and len(rows) == row_limit,
+    )
 
 
 if __name__ == "__main__":
