@@ -6,8 +6,15 @@ import type { QueryResponse, SchemaResponse } from "@/lib/types";
 import { AttemptsTrace } from "@/components/AttemptsTrace";
 import { Disclosure } from "@/components/Disclosure";
 import { ResultsTable } from "@/components/ResultsTable";
-import { SchemaViewer } from "@/components/SchemaViewer";
+import {
+  clampDrawerWidth,
+  DEFAULT_DRAWER_WIDTH,
+  DRAWER_WIDTH_STORAGE_KEY,
+  SchemaDrawer,
+} from "@/components/SchemaDrawer";
 import { SqlBlock } from "@/components/SqlBlock";
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { useMediaQuery } from "@/lib/useMediaQuery";
 
 const EXAMPLES = [
   "How many customers are from Germany?",
@@ -21,6 +28,12 @@ export default function Page() {
   const [response, setResponse] = useState<QueryResponse | null>(null);
   const [schema, setSchema] = useState<SchemaResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [schemaOpen, setSchemaOpen] = useState(false);
+  const [schemaWidth, setSchemaWidth] = useState(DEFAULT_DRAWER_WIDTH);
+
+  /** Below this the panel overlays; above it the content shifts aside instead. */
+  const isWide = useMediaQuery("(min-width: 1024px)");
+  const shiftContent = schemaOpen && isWide;
   const [transportError, setTransportError] = useState<string | null>(null);
 
   /** Lets a newer question cancel an in-flight one instead of racing it. */
@@ -34,6 +47,21 @@ export default function Page() {
         // The schema panel is supplementary; failing to load it must not break the page.
       });
     return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    try {
+      const stored = Number(window.localStorage.getItem(DRAWER_WIDTH_STORAGE_KEY));
+      if (Number.isFinite(stored) && stored > 0) setSchemaWidth(clampDrawerWidth(stored));
+    } catch {
+      // Keep the default width.
+    }
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => setSchemaWidth((w) => clampDrawerWidth(w));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   useEffect(() => () => inFlight.current?.abort(), []);
@@ -70,9 +98,29 @@ export default function Page() {
   const showTrace = response && response.attempts.length > 0;
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-12 sm:py-16">
+    <div
+      style={{ paddingRight: shiftContent ? schemaWidth : undefined }}
+      className="transition-[padding] duration-200 ease-out"
+    >
+      <main className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-16">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Text-to-SQL Agent</h1>
+        <div className="flex items-start justify-between gap-4">
+          <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
+            Text-to-SQL Agent
+          </h1>
+          <div className="flex shrink-0 items-center gap-2">
+            {schema && (
+              <button
+                type="button"
+                onClick={() => setSchemaOpen(true)}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-900 dark:border-slate-800 dark:text-slate-400 dark:hover:border-slate-600 dark:hover:text-slate-100"
+              >
+                Schema
+              </button>
+            )}
+            <ThemeToggle />
+          </div>
+        </div>
         <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
           Ask a question about the Chinook music-store database. The model writes the
           SQL; a validator decides whether it is safe to run before anything reaches
@@ -199,13 +247,17 @@ export default function Page() {
         </div>
       )}
 
+      </main>
+
       {schema && (
-        <div className="mt-10">
-          <Disclosure summary="Database schema" count={schema.tables.length}>
-            <SchemaViewer schema={schema} />
-          </Disclosure>
-        </div>
+        <SchemaDrawer
+          schema={schema}
+          open={schemaOpen}
+          width={schemaWidth}
+          onWidthChange={setSchemaWidth}
+          onClose={() => setSchemaOpen(false)}
+        />
       )}
-    </main>
+    </div>
   );
 }
