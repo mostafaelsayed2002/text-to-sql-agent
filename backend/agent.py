@@ -11,11 +11,11 @@ from typing import Literal
 import psycopg
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
+from prompts import build_messages
 from pydantic import BaseModel, Field
+from validator import DEFAULT_LIMIT, SqlRefused, validate
 
 from db import QueryFailed, QueryResults, run_query
-from prompts import build_messages
-from validator import DEFAULT_LIMIT, SqlRefused, validate
 
 load_dotenv()
 
