@@ -3,8 +3,13 @@ import type { QueryResponse, SchemaResponse } from "./types";
 /**
  * Point at the FastAPI backend when NEXT_PUBLIC_API_URL is set; otherwise fall
  * back to the in-repo mock routes so the UI runs with no backend at all.
+ *
+ * `||` rather than `??` on purpose: the Docker build always defines this ARG,
+ * so an unconfigured image inlines an empty string here, which must still fall
+ * back to the mocks. Note the value is baked in at build time, not read at
+ * runtime -- Next inlines every NEXT_PUBLIC_* reference into the bundle.
  */
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "/api/mock";
+const BASE = process.env.NEXT_PUBLIC_API_URL || "/api/mock";
 
 /** Thrown for transport/HTTP failures. Validator refusals are NOT errors — they
  *  come back as a normal 200 with `refused: true`. */
