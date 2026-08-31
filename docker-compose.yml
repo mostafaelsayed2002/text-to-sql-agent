@@ -5,6 +5,8 @@ services:
       POSTGRES_DB: chinook
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Read by db/02_readonly_user.sh at first boot.
+      APP_RO_PASSWORD: ${APP_RO_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
